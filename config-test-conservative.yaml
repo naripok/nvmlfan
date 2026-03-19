@@ -1,0 +1,26 @@
+foreground: true
+logging:
+  level: debug
+  type: stdout
+period: 5 # Check temperature every 5 seconds
+
+# Conservative configuration for initial testing
+# Higher fan speeds to ensure safety during testing
+cards:
+  0:
+    mode: curve
+    curve:
+      # Conservative curve - keeps fans higher for safety
+      - [40, 40] # Below 40°C: 40% fan speed
+      - [50, 50] # At 50°C: 50% fan speed
+      - [60, 60] # At 60°C: 60% fan speed (current temp: 56°C)
+      - [70, 80] # At 70°C: 80% fan speed
+      - [80, 100] # At 80°C: 100% fan speed
+  1:
+    mode: curve
+    curve:
+      - [40, 40]
+      - [50, 50]
+      - [60, 60]
+      - [70, 80] # Current temp is ~70°C, will run at 80%
+      - [80, 100]

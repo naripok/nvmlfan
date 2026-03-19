@@ -130,11 +130,13 @@ func PrintCardInfo(idx int) {
 	device := DeviceGetHandleByIndex(idx)
 	sn, ret := device.GetSerial()
 	if ret != nvml.SUCCESS {
-		log.Fatalf("Can't get serial number",  "GPU", idx, "error",  nvml.ErrorString(ret))
+		slog.Warn("Can't get serial number",  "GPU", idx, "error",  nvml.ErrorString(ret))
+		sn = "N/A"
 	}
 	uuid, ret := device.GetUUID()
 	if ret != nvml.SUCCESS {
-		log.Fatalf("Can't get UUID",  "GPU", idx, "error",  nvml.ErrorString(ret))
+		slog.Warn("Can't get UUID",  "GPU", idx, "error",  nvml.ErrorString(ret))
+		uuid = "N/A"
 	}
 	name, ret := device.GetName()
 	if ret != nvml.SUCCESS {
