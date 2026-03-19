@@ -1,11 +1,28 @@
 [Unit]
 Description=Control of nvidia GPUs fans
+After=multi-user.target
 
 [Service]
+Type=simple
 User=root
 
+# Main process
 ExecStart=/usr/local/sbin/nvmlfan --config /usr/local/etc/nvmlfan.yaml
+
+# Always restore fans to automatic control when service stops (for any reason)
 ExecStopPost=/usr/local/sbin/nvmlfan --restore
+
+# Restart policy - always restart if service dies unexpectedly
+# This means if nvmlfan crashes, systemd will automatically restart it
+Restart=always
+RestartSec=5
+
+# Allow unlimited restarts - we want this service to keep trying
+# Default StartLimitBurst would give up after too many failures
+StartLimitBurst=0
+
+# Kill the process if it takes longer than 10s to stop
+TimeoutStopSec=10
 
 [Install]
 WantedBy=multi-user.target
