@@ -29,6 +29,16 @@ type Config struct {
 	Period     int                `yaml:"period"`
 	Cards      map[int]GPUConfig  `yaml:"cards"`
 	Logging    map[string]string `yaml:"logging"`
+	Shared     *SharedConfig      `yaml:"shared"`  // Shared control across all GPUs
+}
+
+// SharedConfig holds configuration for shared fan control across multiple GPUs
+type SharedConfig struct {
+	Mode   string    `yaml:"mode"`   // Control mode (e.g., "curve" or "target")
+	Target int       `yaml:"target"` // Target temperature for PID control
+	PID    []float64 `yaml:"pid"`    // PID control coefficients [Kp, Ki, Kd]
+	Curve  [][2]int  `yaml:"curve"`  // Fan curve
+	GPUs   []int     `yaml:"gpus"`   // List of GPU indices to control together
 }
 
 const (
@@ -392,7 +402,168 @@ func FanTargetControl( idx int ) {
 
 }
 
+// SharedFanCurveControl controls multiple GPUs' fans based on the highest temperature
+func SharedFanCurveControl(gpuIndices []int) {
+	slog.Info("Shared curve control", "GPUs", gpuIndices)
+	
+	if len(gpuIndices) == 0 {
+		slog.Error("No GPUs specified for shared control")
+		return
+	}
+	
+	shared := config.Shared
+	curve := shared.Curve
+	
+	// Get thermal info from first GPU (assume all have similar limits)
+	minSpeed, maxSpeed, maxTemp := GetThermalInfo(gpuIndices[0])
+	
+	// Clamp curve
+	slog.Debug("Clamping shared curve", "dump", curve)
+	for i, point := range curve {
+		if point[0] > maxTemp {
+			slog.Debug("Clamping temperature above maximum GPU threshold", "temp", point[0], "point", i, "max", maxTemp)
+			point[0] = maxTemp
+		}
+		if point[1] < minSpeed {
+			slog.Debug("Clamping fan below allowed range", "speed", point[0], "point", i, "min", minSpeed)
+			point[1] = minSpeed
+		}
+		if point[1] > maxSpeed {
+			slog.Debug("Clamping fan above allowed range", "speed", point[0], "point", i, "max", maxSpeed)
+			point[1] = maxSpeed
+		}
+		if i > 0 {
+			if point[0] <= curve[i-1][0] {
+				slog.Error("Temperature curve is not increasing", "point", i-1, "next", i)
+			}
+			if point[1] <= curve[i-1][1] {
+				slog.Error("Fan speed curve is not increasing", "point", i-1, "next", i)
+			}
+		}
+		curve[i] = point
+	}
+	slog.Debug("Clamped shared curve", "dump", curve)
+	slog.Debug("Starting shared control loop", "GPUs", gpuIndices)
+	
+	for {
+		// Find the maximum temperature across all GPUs
+		maxTempValue := 0
+		for _, idx := range gpuIndices {
+			temp := GetTemperature(idx)
+			if temp > maxTempValue {
+				maxTempValue = temp
+			}
+		}
+		
+		// Compute fan speed based on maximum temperature
+		speed := ComputeFanSpeed(maxTempValue, curve, minSpeed, maxSpeed)
+		slog.Debug("Setting shared speed", "GPUs", gpuIndices, "speed", speed, "maxTemp", maxTempValue)
+		
+		// Apply the same fan speed to all GPUs in the group
+		for _, idx := range gpuIndices {
+			temp := GetTemperature(idx)
+			slog.Debug("Applying shared speed to GPU", "GPU", idx, "temp", temp, "speed", speed)
+			SetFanSpeed(idx, speed)
+		}
+		
+		time.Sleep(time.Duration(config.Period) * time.Second)
+	}
+}
+
+// SharedFanTargetControl controls multiple GPUs' fans based on the highest temperature using PID
+func SharedFanTargetControl(gpuIndices []int) {
+	slog.Info("Shared target control", "GPUs", gpuIndices)
+	
+	if len(gpuIndices) == 0 {
+		slog.Error("No GPUs specified for shared control")
+		return
+	}
+	
+	shared := config.Shared
+	
+	// Get thermal info from first GPU (assume all have similar limits)
+	iminSpeed, imaxSpeed, _ := GetThermalInfo(gpuIndices[0])
+	minSpeed := float64(iminSpeed)
+	maxSpeed := float64(imaxSpeed)
+	
+	target := shared.Target
+	kp := shared.PID[0]
+	ki := shared.PID[1]
+	kd := shared.PID[2]
+	var pid_error, pid_prevError, iacc float64
+	
+	for {
+		// Find the maximum temperature across all GPUs
+		maxTempValue := 0
+		for _, idx := range gpuIndices {
+			temp := GetTemperature(idx)
+			if temp > maxTempValue {
+				maxTempValue = temp
+			}
+		}
+		
+		// PID control based on maximum temperature
+		pid_error = -float64(target - maxTempValue)
+		pTerm := pid_error * kp
+		dError := pid_error - pid_prevError
+		dTerm := kd * dError
+		iTerm := ki * pid_error
+		pid_prevError = pid_error
+		
+		// Antiwindup
+		if pTerm+iacc > maxSpeed && iTerm > 0 ||
+			pTerm+iacc < minSpeed && iTerm < 0 {
+			slog.Debug("PID antiwindup triggered", "iTerm", iTerm)
+			iTerm = 0
+		}
+		iacc += iTerm
+		
+		output := int(pTerm + iacc + dTerm)
+		
+		// Clamp output
+		if output < iminSpeed {
+			slog.Debug("PID clamping output to min", "output", output, "min", iminSpeed)
+			output = iminSpeed
+		} else if output > imaxSpeed {
+			slog.Debug("PID clamping output to max", "output", output, "max", imaxSpeed)
+			output = imaxSpeed
+		}
+		
+		slog.Debug("PID state", "kp", kp, "ki", ki, "kd", kd,
+			"dError", dError, "pTerm", pTerm, "iacc", iacc, "dTerm", dTerm,
+			"maxTemp", maxTempValue, "output", output, "pid_error", pid_error)
+		
+		// Apply the same fan speed to all GPUs in the group
+		for _, idx := range gpuIndices {
+			temp := GetTemperature(idx)
+			slog.Debug("Applying shared speed to GPU", "GPU", idx, "temp", temp, "speed", output)
+			SetFanSpeed(idx, output)
+		}
+		
+		time.Sleep(time.Duration(config.Period) * time.Second)
+	}
+}
+
 func ControlFans() {
+	// Check if shared mode is configured
+	if config.Shared != nil && len(config.Shared.GPUs) > 0 {
+		slog.Info("Using shared control mode", "GPUs", config.Shared.GPUs)
+		// Take control of all GPUs in shared group
+		for _, idx := range config.Shared.GPUs {
+			slog.Info("Taking FAN controls of card (shared mode)", "GPU", idx)
+		}
+		// Start shared control
+		if config.Shared.Mode == "curve" {
+			go SharedFanCurveControl(config.Shared.GPUs)
+		} else if config.Shared.Mode == "target" {
+			go SharedFanTargetControl(config.Shared.GPUs)
+		} else {
+			slog.Error("Wrong shared mode", "mode", config.Shared.Mode)
+		}
+		return
+	}
+	
+	// Original per-card control logic
 	slog.Debug("Cards configurations", "dump", config.Cards)
 	deviceCount := GetDeviceCount()
 	for idx := 0; idx < deviceCount; idx++ {

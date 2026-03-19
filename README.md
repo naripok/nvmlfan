@@ -10,7 +10,38 @@ Demon controls only GPU temperature (ignores other temperatures like memory).
 Demon controls all fans at once, even if there is more then one fan, they will be set to the same "speed".
 
 # Modes
-## mode: curve
+
+## Shared Mode (Control Multiple GPUs Together)
+```yaml
+shared:
+  mode: curve
+  gpus: [0, 1]  # Control both GPU 0 and GPU 1 together
+  curve:
+    - [ 60, 30 ]
+    - [ 65, 50] 
+    - [ 75, 100]
+```
+Shared mode controls multiple GPUs' fans based on the **highest temperature** across all specified GPUs. All GPUs in the group will have their fans set to the same speed, determined by the hottest GPU's temperature. This is useful for:
+- Ensuring consistent cooling across all GPUs
+- Having cooler GPUs help dissipate heat from hotter ones
+- Maintaining predictable acoustic levels
+
+When `shared` is configured, individual `cards` configuration is ignored.
+
+Shared mode also supports `target` (PID) control:
+```yaml
+shared:
+  mode: target
+  gpus: [0, 1]
+  target: 65
+  pid: [ 20, 0.1, 0 ]
+```
+
+See [SHARED-MODE.md](SHARED-MODE.md) for detailed information.
+
+## Individual Card Control
+
+### mode: curve
 ```yaml
 cards:
   0:

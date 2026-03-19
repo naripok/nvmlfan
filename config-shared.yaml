@@ -1,0 +1,18 @@
+foreground: true
+logging:
+  level: debug
+  type: stdout
+period: 0.1
+
+# Shared mode - control both GPUs based on the highest temperature
+# This ensures both GPUs' fans spin at the same speed based on the hottest GPU
+shared:
+  mode: curve
+  gpus: [0, 1]  # Control both GPU 0 and GPU 1 together
+  curve:
+    - [40, 40]  # Below 40°C: 40% fan speed
+    - [50, 60]  # At 50°C: 60% fan speed
+    - [60, 80]  # At 60°C: 80% fan speed
+    - [70, 100] # At 70°C: 100% fan speed
+
+# Note: When 'shared' is configured, individual 'cards' configuration is ignored
